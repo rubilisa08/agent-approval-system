@@ -1,0 +1,18 @@
+# 화면 테마: 깔끔한 한글 글꼴(Pretendard) + 차분한 남색 주 색상.
+# 글꼴 파일은 app.py의 CSS가 jsDelivr에서 받는다. 인터넷이 없으면 맑은 고딕 등 시스템 글꼴로 대체된다.
+[theme]
+base = "light"
+primaryColor = "#4338CA"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F4F5F9"
+textColor = "#1D2433"
+borderColor = "#E3E6EC"
+baseRadius = "0.6rem"
+baseFontSize = 15
+font = "Pretendard, 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif"
+headingFont = "Pretendard, 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif"
+codeFont = "Consolas, 'D2Coding', monospace"
+
+
+[theme.sidebar]
+backgroundColor = "#F4F5F9"

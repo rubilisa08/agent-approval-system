@@ -21,13 +21,39 @@ st.set_page_config(page_title="콘텐츠 발행 승인함", page_icon="📨", la
 st.markdown(
     """
 <style>
-.chip{display:inline-block;padding:2px 10px;margin:0 6px 4px 0;border-radius:999px;font-size:0.85rem;font-weight:600}
-.chip-red{background:#fde2e1;color:#b42318}
-.chip-amber{background:#fef0c7;color:#b54708}
-.chip-blue{background:#e0eaff;color:#3538cd}
-.chip-green{background:#dcfae6;color:#067647}
-.chip-gray{background:#eaecf0;color:#344054}
-.chip-purple{background:#ebe9fe;color:#5925dc}
+/* 글꼴: Pretendard (jsDelivr, 화면에 쓰인 글자만 받는 dynamic subset). 인터넷이 없으면 config.toml의 대체 글꼴로 표시된다 */
+@import url("https://cdn.jsdelivr.net/npm/pretendard@1.3.9/dist/web/static/pretendard-dynamic-subset.min.css");
+/* 색 규칙: 빨강 = 사실 위험(수치·기한 초과) · 보라 = 지어낸 주장 · 주황 = 품질 · 파랑 = 사람 확인 단계 · 회색 = 참고 정보 */
+.chip{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;margin:0 6px 6px 0;border-radius:999px;
+  font-size:0.8rem;font-weight:600;line-height:1.4;border:1px solid transparent;white-space:nowrap}
+.chip-red{background:#FEF3F2;color:#B42318;border-color:#FECDCA}
+.chip-amber{background:#FFFAEB;color:#B54708;border-color:#FEDF89}
+.chip-blue{background:#EEF4FF;color:#3538CD;border-color:#C7D7FE}
+.chip-green{background:#ECFDF3;color:#067647;border-color:#ABEFC6}
+.chip-gray{background:#F2F4F7;color:#475467;border-color:#E4E7EC}
+.chip-purple{background:#F4F3FF;color:#5925DC;border-color:#D9D6FE}
+.dot::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor;flex:none}
+/* 참고 정보(요청 ID·버전·대기 시간): 테두리만 있는 작은 칩 */
+.meta{display:inline-flex;align-items:center;padding:2px 9px;margin:0 6px 6px 0;border-radius:6px;font-size:0.78rem;
+  font-weight:500;color:#475467;background:#fff;border:1px solid #D0D5DD;white-space:nowrap}
+.meta.mono{font-family:Consolas,'D2Coding',monospace;font-size:0.74rem}
+.meta.m-blue{color:#3538CD;border-color:#C7D7FE;background:#EEF4FF}
+.meta.m-green{color:#067647;border-color:#ABEFC6;background:#ECFDF3}
+.meta.m-amber{color:#B54708;border-color:#FEDF89;background:#FFFAEB}
+.meta.m-red{color:#B42318;border-color:#FECDCA;background:#FEF3F2;font-weight:700}
+/* 멈춘 이유: 이유마다 같은 색의 카드 */
+.rbox{display:flex;align-items:flex-start;gap:10px;padding:10px 14px;margin:0 0 8px;border-radius:10px;
+  border:1px solid;border-left-width:4px;font-size:0.92rem;line-height:1.55}
+.rbox .chip{margin:0;flex:none}
+.rbox.r-red{background:#FFFBFA;border-color:#FECDCA;border-left-color:#D92D20}
+.rbox.r-purple{background:#FCFBFF;border-color:#D9D6FE;border-left-color:#7A5AF8}
+.rbox.r-amber{background:#FFFDF5;border-color:#FEDF89;border-left-color:#F79009}
+.rbox.r-blue{background:#F8FAFF;border-color:#C7D7FE;border-left-color:#444CE7}
+.rbox.r-gray{background:#FAFAFB;border-color:#E4E7EC;border-left-color:#667085}
+/* 사이드바 기준 목록 */
+.crit{margin:0 0 10px}
+.crit .chip{margin-bottom:2px}
+.crit div{font-size:0.82rem;color:#475467;line-height:1.45;padding-left:2px}
 mark{background:#fde2e1;color:inherit;padding:0 2px;border-bottom:2px solid #f04438}
 mark.claim{background:#ebe9fe;border-bottom-color:#7a5af8}
 .step{font-size:0.9rem;margin:2px 0}
@@ -57,8 +83,24 @@ REASON_CHIP = {"NUMERIC_NO_SOURCE": "chip-red", "UNSUPPORTED_CLAIM": "chip-purpl
 STATUS_LABEL = {"pending_review": "⏸️ 승인 대기", "published": "📨 발송됨", "rejected": "🚫 반려", "drafting": "✍️ 작성 중"}
 
 
+def chip(code: str, label: str) -> str:
+    return f'<span class="chip dot {REASON_CHIP.get(code, "chip-gray")}">{html.escape(label)}</span>'
+
+
 def chips(reasons: list[dict]) -> str:
-    return "".join(f'<span class="chip {REASON_CHIP.get(r["code"], "chip-gray")}">{html.escape(r["label"])}</span>' for r in reasons)
+    return "".join(chip(r["code"], r["label"]) for r in reasons)
+
+
+def reason_box(r: dict) -> str:
+    color = REASON_CHIP.get(r["code"], "chip-gray").replace("chip-", "r-")
+    return f'<div class="rbox {color}">{chip(r["code"], r["label"])}<span>{html.escape(r["detail"])}</span></div>'
+
+
+def wait_meta(job: dict) -> str:
+    """대기 시간 칩: 하루 안 = 초록, 기한 전 = 주황, 기한 초과 = 빨강."""
+    days = job.get("_pending_days") or 0
+    tone = "m-red" if job.get("_overdue") else "m-amber" if days >= 1 else "m-green"
+    return f'<span class="meta {tone}">{"⏰ " if job.get("_overdue") else ""}대기 {service.format_age(job.get("_pending_days"))}</span>'
 
 
 def highlight(post: str, findings: list[dict], claims: list[str] = ()) -> str:
@@ -165,13 +207,20 @@ with st.sidebar:
     st.divider()
     st.markdown("**사람 승인이 필요한 경우**")
     st.markdown(
+        "".join(
+            f'<div class="crit">{chip(code, label)}<div>{desc}</div></div>'
+            for code, label, desc in [
+                ("NUMERIC_NO_SOURCE", "숫자 출처 누락", "수치 주장에 확인 가능한 출처가 없음"),
+                ("UNSUPPORTED_CLAIM", "근거 없는 주장", "요청 내용·출처에 없는 사실을 LLM 검수가 발견"),
+                ("LOW_QUALITY", "검수 점수 미달", f"LLM 검수 점수 {QUALITY_THRESHOLD}점 미만"),
+                ("EVAL_ERROR", "품질 평가 실패", "평가 노드 오류 — 모르면 멈춤"),
+                ("REVISION_CONFIRM", "재작성본 확인", "담당자가 재작성을 요청한 글"),
+            ]
+        ),
+        unsafe_allow_html=True,
+    )
+    st.markdown(
         f"""
-- <span class="chip chip-red">숫자 출처 누락</span> 수치 주장에 확인 가능한 출처가 없음
-- <span class="chip chip-purple">근거 없는 주장</span> 요청 내용·출처에 없는 사실을 LLM 검수가 발견
-- <span class="chip chip-amber">검수 점수 미달</span> LLM 검수 점수 {QUALITY_THRESHOLD}점 미만
-- <span class="chip chip-gray">품질 평가 실패</span> 평가 노드 오류
-- <span class="chip chip-blue">재작성본 확인</span> 담당자가 재작성을 요청한 글
-
 그 외에는 **사람을 거치지 않고 자동 발송**됩니다.
 
 **운영 규칙**
@@ -257,10 +306,10 @@ with tab_inbox:
             st.markdown(f"### {job['topic']}")
             st.markdown(
                 chips(job.get("reasons", []))
-                + f'<span class="chip chip-gray">{job["request_id"]}</span>'
-                + f'<span class="chip chip-gray">v{job.get("revision", 0) + 1} 초안</span>'
-                + f'<span class="chip {"chip-red" if job["_overdue"] else "chip-gray"}">'
-                f'{"⏰ " if job["_overdue"] else ""}대기 {service.format_age(job["_pending_days"])}</span>',
+                + '<span style="display:inline-block;width:6px"></span>'
+                + wait_meta(job)
+                + f'<span class="meta {"m-blue" if job.get("revision", 0) else ""}">v{job.get("revision", 0) + 1} 초안</span>'
+                + f'<span class="meta mono">{job["request_id"]}</span>',
                 unsafe_allow_html=True,
             )
             if job["_overdue"]:
@@ -268,8 +317,7 @@ with tab_inbox:
 
             # --- 멈춘 이유
             st.markdown("##### ⛔ 멈춘 이유")
-            for r in job.get("reasons", []):
-                st.error(f"**{r['label']}** — {r['detail']}", icon="⏸️")
+            st.markdown("".join(reason_box(r) for r in job.get("reasons", [])), unsafe_allow_html=True)
 
             # --- 원문 vs 생성 글
             c1, c2 = st.columns([2, 3], gap="medium")  # 읽을 양이 많은 포스팅 쪽을 넓게
