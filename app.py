@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import html
+import os
 import re
 
 import streamlit as st
@@ -31,6 +32,22 @@ mark{background:#fde2e1;color:inherit;padding:0 2px;border-bottom:2px solid #f04
 mark.claim{background:#ebe9fe;border-bottom-color:#7a5af8}
 .step{font-size:0.9rem;margin:2px 0}
 .step code{font-size:0.8rem}
+/* 생성된 포스팅 · 요청 원문: 좁은 칸에서도 읽히도록 글자 크기와 줄 간격을 직접 정한다 */
+.post,.req{font-size:0.95rem;line-height:1.75;word-break:keep-all;overflow-wrap:anywhere}
+.post-h1{font-size:1.25rem;font-weight:700;line-height:1.4;margin:0 0 0.8rem}
+.post-h2{font-size:1.05rem;font-weight:700;line-height:1.45;margin:1.1rem 0 0.35rem}
+.post-h3{font-size:0.98rem;font-weight:700;margin:0.9rem 0 0.3rem}
+.post p{margin:0 0 0.7rem}
+.post ul,.req ul{margin:0 0 0.7rem !important;padding-left:1.1rem !important}
+.post li,.req li{margin:0 0 0.35rem !important;padding-left:0 !important}
+.req{font-size:0.9rem;line-height:1.65}
+.post-ref{font-size:0.85rem;opacity:0.7;word-break:break-all}
+.req-label{font-size:0.8rem;font-weight:700;opacity:0.6;margin:0.7rem 0 0.1rem;letter-spacing:0.02em}
+.req-label:first-child{margin-top:0}
+.req-src{font-size:0.85rem;word-break:break-all}
+.req-feedback{background:rgba(53,56,205,0.08);border-left:3px solid #3538cd;padding:6px 10px;border-radius:4px}
+/* 대기 목록: 항목 사이 간격 */
+div[role="radiogroup"] label{margin-bottom:10px;line-height:1.4}
 </style>
 """,
     unsafe_allow_html=True,
@@ -58,6 +75,69 @@ def highlight(post: str, findings: list[dict], claims: list[str] = ()) -> str:
     return out
 
 
+def _inline(s: str) -> str:
+    return re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", s)
+
+
+def render_post(post: str, findings: list[dict], claims: list[str] = ()) -> str:
+    """생성된 포스팅을 읽기 좋은 HTML로. 표시(<mark>)는 highlight와 같고, 제목·문단 크기는 CSS로 정한다."""
+    marked = highlight(post, findings, claims)
+    parts, para, in_list = [], [], False
+
+    def flush():
+        nonlocal in_list
+        if para:
+            parts.append("<p>" + " ".join(para) + "</p>")
+            para.clear()
+        if in_list:
+            parts.append("</ul>")
+            in_list = False
+
+    for line in marked.splitlines():
+        s = line.strip()
+        h = re.match(r"^(#{1,6})\s+(.*)$", s)
+        if not s:
+            flush()
+        elif h:
+            flush()
+            level = max(1, len(h.group(1)) - 2)  # highlight가 제목을 두 단계 내렸으므로 되돌린다
+            parts.append(f'<div class="post-h{min(level, 3)}">{_inline(h.group(2))}</div>')
+        elif re.match(r"^[-*]\s+", s):
+            if para:
+                parts.append("<p>" + " ".join(para) + "</p>")
+                para.clear()
+            if not in_list:
+                parts.append("<ul>")
+                in_list = True
+            parts.append(f"<li>{_inline(s[2:])}</li>")
+        elif re.match(r"^\[\d+\]\s", s):
+            flush()
+            parts.append(f'<div class="post-ref">{s}</div>')
+        else:
+            para.append(_inline(s))
+    flush()
+    return '<div class="post">' + "".join(parts) + "</div>"
+
+
+def render_request(job: dict) -> str:
+    e = lambda t: html.escape(str(t), quote=False)
+    points = [p.strip(" -•\t") for p in job["key_points"].splitlines() if p.strip()]
+    out = [
+        '<div class="req">',
+        '<div class="req-label">주제</div>', f"<div>{e(job['topic'])}</div>",
+        '<div class="req-label">대상 독자</div>', f"<div>{e(job.get('audience') or '-')}</div>",
+        '<div class="req-label">핵심 내용</div>', "<ul>" + "".join(f"<li>{e(p)}</li>" for p in points) + "</ul>",
+        '<div class="req-label">제공된 출처</div>',
+    ]
+    if job.get("sources"):
+        out += [f'<div class="req-src">[{i}] {e(s)}</div>' for i, s in enumerate(job["sources"], 1)]
+    else:
+        out.append('<div style="opacity:0.6">(없음)</div>')
+    if job.get("feedback"):
+        out += ['<div class="req-label">직전 재작성 요청</div>', f'<div class="req-feedback">{e(job["feedback"])}</div>']
+    return "".join(out) + "</div>"
+
+
 def short_reason(job: dict) -> str:
     parts = []
     for r in job.get("reasons", []):
@@ -78,7 +158,7 @@ with st.sidebar:
     st.header("📨 콘텐츠 발행 승인함")
     st.caption(f"LLM: **{llm.provider_label()}**")
     st.caption(f"구독자: **{subscriber_count()}명** (data/subscribers.csv)")
-    st.caption(f"체크포인터: `data/checkpoints.sqlite`")
+    st.caption(f"체크포인터: `{os.getenv('CHECKPOINT_DB') or 'data/checkpoints.sqlite'}`")
     st.divider()
     st.markdown("**사람 승인이 필요한 경우**")
     st.markdown(
@@ -161,8 +241,8 @@ with tab_inbox:
                 keys,
                 index=keys.index(prev) if prev in keys else 0,
                 format_func=lambda rid: (
-                    f"{'⏰ ' if options[rid]['_overdue'] else ''}{options[rid]['topic']}  \n"
-                    f"{short_reason(options[rid])} · 대기 {service.format_age(options[rid]['_pending_days'])}"
+                    f"{'⏰ ' if options[rid]['_overdue'] else ''}**{options[rid]['topic']}**  \n"
+                    f":gray[{short_reason(options[rid])} · 대기 {service.format_age(options[rid]['_pending_days'])}]"
                 ),
                 label_visibility="collapsed",
             )
@@ -189,28 +269,19 @@ with tab_inbox:
                 st.error(f"**{r['label']}** — {r['detail']}", icon="⏸️")
 
             # --- 원문 vs 생성 글
-            c1, c2 = st.columns(2, gap="medium")
+            c1, c2 = st.columns([2, 3], gap="medium")  # 읽을 양이 많은 포스팅 쪽을 넓게
             with c1:
                 st.markdown("##### 📝 요청 원문")
-                with st.container(border=True):
-                    st.markdown(f"**주제** {job['topic']}")
-                    st.markdown(f"**대상 독자** {job.get('audience') or '-'}")
-                    st.markdown("**핵심 내용**")
-                    st.text(job["key_points"])
-                    st.markdown("**제공된 출처**")
-                    if job.get("sources"):
-                        for i, src in enumerate(job["sources"], 1):
-                            st.markdown(f"[{i}] {src}")
-                    else:
-                        st.caption("(없음)")
-                    if job.get("feedback"):
-                        st.markdown(f"**직전 재작성 요청** {job['feedback']}")
+                with st.container(border=True, height=520):
+                    st.markdown(render_request(job), unsafe_allow_html=True)
             with c2:
                 claims = q.get("unsupported_claims", [])
-                legend = [t for t, on in (("빨강 = 출처 없는 수치", findings), ("보라 = 근거 없는 주장", claims)) if on]
-                st.markdown("##### 🤖 생성된 포스팅" + (f"  ({', '.join(legend)})" if legend else ""))
+                st.markdown("##### 🤖 생성된 포스팅")
+                legend = [t for t, on in ((":red-background[빨강] 출처 없는 수치", findings), (":violet-background[보라] 근거 없는 주장", claims)) if on]
                 with st.container(border=True, height=520):
-                    st.markdown(highlight(job["draft"], findings, claims), unsafe_allow_html=True)
+                    if legend:
+                        st.caption(" · ".join(legend))
+                    st.markdown(render_post(job["draft"], findings, claims), unsafe_allow_html=True)
 
             # --- 에이전트 판단과 근거
             st.markdown("##### 🔍 에이전트의 판단과 근거")

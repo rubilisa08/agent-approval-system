@@ -6,3 +6,4 @@ data/checkpoints.sqlite*
 outbox/
 .claude/
 .omc/
+data/demo.sqlite*
