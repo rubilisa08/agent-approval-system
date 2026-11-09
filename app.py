@@ -11,7 +11,7 @@ import streamlit as st
 
 import llm
 import service
-from criteria import QUALITY_THRESHOLD
+from criteria import MAX_REVISIONS, PENDING_SLA_DAYS, QUALITY_THRESHOLD
 from graph import subscriber_count
 from samples import SAMPLES
 
@@ -90,6 +90,10 @@ with st.sidebar:
 - <span class="chip chip-blue">재작성본 확인</span> 담당자가 재작성을 요청한 글
 
 그 외에는 **사람을 거치지 않고 자동 발송**됩니다.
+
+**운영 규칙**
+- 재작성 요청은 글 하나당 **{MAX_REVISIONS}회**까지
+- **{PENDING_SLA_DAYS:g}일** 넘게 대기한 글은 목록 맨 위에 빨간색으로 표시 (자동 발송·자동 반려 없음)
 """,
         unsafe_allow_html=True,
     )
@@ -106,7 +110,7 @@ with st.sidebar:
             st.rerun()
 
 jobs = service.list_jobs()
-pending = [j for j in jobs if j["_pending"]]
+pending = sorted([j for j in jobs if j["_pending"]], key=lambda j: (not j["_overdue"], -(j["_pending_days"] or 0)))
 
 tab_inbox, tab_new, tab_log = st.tabs([f"⏸️ 승인 대기함 ({len(pending)})", "✍️ 새 발행 요청", "📜 처리 이력"])
 
@@ -145,6 +149,10 @@ with tab_inbox:
         left, right = st.columns([1, 2.6], gap="large")
         with left:
             st.markdown("#### 대기 목록")
+            overdue = [j for j in pending if j["_overdue"]]
+            if overdue:
+                st.error(f"{PENDING_SLA_DAYS:g}일 넘게 대기 중인 글 {len(overdue)}건 — 먼저 처리해 주세요.", icon="⏰")
+            st.caption(f"오래 기다린 순서 · {PENDING_SLA_DAYS:g}일 초과 건이 맨 위")
             options = {j["request_id"]: j for j in pending}
             keys = list(options)
             prev = st.session_state.get("selected")
@@ -152,7 +160,10 @@ with tab_inbox:
                 "대기 중인 글",
                 keys,
                 index=keys.index(prev) if prev in keys else 0,
-                format_func=lambda rid: f"{options[rid]['topic']}  \n{short_reason(options[rid])}",
+                format_func=lambda rid: (
+                    f"{'⏰ ' if options[rid]['_overdue'] else ''}{options[rid]['topic']}  \n"
+                    f"{short_reason(options[rid])} · 대기 {service.format_age(options[rid]['_pending_days'])}"
+                ),
                 label_visibility="collapsed",
             )
             st.session_state["selected"] = sel
@@ -164,9 +175,13 @@ with tab_inbox:
             st.markdown(
                 chips(job.get("reasons", []))
                 + f'<span class="chip chip-gray">{job["request_id"]}</span>'
-                + f'<span class="chip chip-gray">v{job.get("revision", 0) + 1} 초안</span>',
+                + f'<span class="chip chip-gray">v{job.get("revision", 0) + 1} 초안</span>'
+                + f'<span class="chip {"chip-red" if job["_overdue"] else "chip-gray"}">'
+                f'{"⏰ " if job["_overdue"] else ""}대기 {service.format_age(job["_pending_days"])}</span>',
                 unsafe_allow_html=True,
             )
+            if job["_overdue"]:
+                st.error(f"이 글은 {PENDING_SLA_DAYS:g}일 넘게 결정을 기다리고 있습니다. 오래 기다렸다는 이유로 자동 발송하지 않으니, 승인하거나 반려해 대기함을 비워 주세요.", icon="⏰")
 
             # --- 멈춘 이유
             st.markdown("##### ⛔ 멈춘 이유")
@@ -238,7 +253,9 @@ with tab_inbox:
             st.info(
                 f"이 글(또는 아래에서 직접 수정한 본문)이 **구독자 {subscriber_count()}명에게 이메일로 발송**됩니다. "
                 f"발송본은 `outbox/{job['request_id']}.md`, 발송 기록은 `outbox/send_log.jsonl`에 남으며 **되돌릴 수 없습니다.**  \n"
-                "재작성 요청 시 에이전트가 피드백을 반영해 다시 쓰고, 검사 후 이 대기함으로 다시 돌아옵니다. 반려 시 발송하지 않고 종료합니다.",
+                + (f"재작성 요청 시 에이전트가 피드백을 반영해 다시 쓰고, 검사 후 이 대기함으로 다시 돌아옵니다 (남은 재작성 {job['_revisions_left']}회). "
+                   if job["_revisions_left"] > 0 else f"재작성 요청은 상한({MAX_REVISIONS}회)에 도달했습니다. 승인·직접 수정 후 승인·반려 중에서 골라 주세요. ")
+                + "반려 시 발송하지 않고 종료하며, 사유는 처리 이력에 남습니다.",
                 icon="📨",
             )
 
@@ -251,7 +268,11 @@ with tab_inbox:
                     edited = st.text_area("발송할 본문", value=job["draft"], height=300, key=f"edit_{job['request_id']}_v{job.get('revision', 0)}")  # 버전마다 새 입력칸: 재작성 후 이전 본문이 남지 않게
                 b1, b2, b3 = st.columns(3)
                 approve = b1.form_submit_button("✅ 승인하고 발송", type="primary", use_container_width=True)
-                revise = b2.form_submit_button("✏️ 재작성 요청", use_container_width=True)
+                can_revise = job["_revisions_left"] > 0
+                revise = b2.form_submit_button(
+                    f"✏️ 재작성 요청 (남은 {job['_revisions_left']}회)" if can_revise else "✏️ 재작성 상한 도달",
+                    use_container_width=True, disabled=not can_revise,
+                )
                 reject = b3.form_submit_button("🚫 반려", use_container_width=True)
 
             action = "approve" if approve else "revise" if revise else "reject" if reject else None

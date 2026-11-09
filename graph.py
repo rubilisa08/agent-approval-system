@@ -4,6 +4,7 @@
                                                         └─(기준 걸림)→ human_review ─┬─ 승인/수정 후 승인 → publish
                                                                     (interrupt로 멈춤) ├─ 반려 → reject → END
                                                                                       └─ 재작성 요청 → draft_post
+                                                                                         (MAX_REVISIONS회까지, 넘기면 human_review에서 다시 멈춤)
 
 - 바깥으로 내보내는 단계(publish = 구독자 발송) 바로 앞의 human_review에서 interrupt()로 멈춘다.
 - 멈춘 상태는 SqliteSaver 체크포인터(data/checkpoints.sqlite)에 저장된다. 앱을 껐다 켜도
@@ -14,6 +15,7 @@ from __future__ import annotations
 import csv
 import json
 import operator
+import os
 import re
 import sqlite3
 from datetime import datetime
@@ -26,6 +28,7 @@ from langgraph.types import Command, interrupt
 
 import llm
 from criteria import (
+    MAX_REVISIONS,
     QUALITY_THRESHOLD,
     check_numeric_sources,
     offline_quality_score,
@@ -56,6 +59,7 @@ class PostState(TypedDict, total=False):
     route: str  # "auto" | "human"
     decision: dict
     status: str  # drafting | pending_review | published | rejected
+    pending_since: str  # 승인 대기에 들어간 시각 (대기 기한 계산용)
     published: dict
     history: Annotated[list[dict], operator.add]
 
@@ -191,7 +195,7 @@ def evaluate_quality(state: PostState) -> dict:
 def gate(state: PostState) -> dict:
     reasons = review_reasons(state.get("fact_findings", []), state.get("quality", {}), state.get("revision", 0))
     if reasons:
-        return {"reasons": reasons, "route": "human", "status": "pending_review",
+        return {"reasons": reasons, "route": "human", "status": "pending_review", "pending_since": _now(),
                 "history": _log("gate", "승인 대기로 보냄: " + ", ".join(r["label"] for r in reasons))}
     return {"reasons": [], "route": "auto", "history": _log("gate", "모든 기준 통과 → 사람 확인 없이 자동 발행")}
 
@@ -203,17 +207,24 @@ def route_after_gate(state: PostState) -> Literal["human_review", "publish"]:
 # ------------------------------------------------------------------ 5. 사람 승인 (HITL)
 
 
-def human_review(state: PostState) -> Command[Literal["publish", "reject", "draft_post"]]:
+def human_review(state: PostState) -> Command[Literal["publish", "reject", "draft_post", "human_review"]]:
     # 재개 시 이 노드는 처음부터 다시 실행되므로, interrupt() 앞에는 부작용 있는 코드를 두지 않는다.
+    revisions_left = max(0, MAX_REVISIONS - state.get("revision", 0))
     answer = interrupt({
         "request_id": state["request_id"],
         "reasons": state.get("reasons", []),
         "draft": state["draft"],
         "on_approve": f"구독자 {subscriber_count()}명에게 이메일 발송",
+        "revisions_left": revisions_left,
     })
     action = answer.get("action")
     decision = {**answer, "at": _now()}
     reviewer = answer.get("reviewer") or "담당자"
+    if action == "revise" and revisions_left <= 0:
+        # 상한을 넘긴 재작성 요청은 받지 않고 같은 자리에서 다시 멈춘다 (발송·반려 어느 쪽으로도 가지 않음)
+        return Command(goto="human_review", update={
+            "history": _log("human_review", f"재작성 요청 거절: 상한 {MAX_REVISIONS}회에 도달 — 승인·수정 후 승인·반려 중 선택 필요"),
+        })
     if action == "approve":
         update = {"decision": decision, "history": _log("human_review", f"{reviewer} 승인")}
         if answer.get("edited_text", "").strip() and answer["edited_text"].strip() != state["draft"].strip():
@@ -272,7 +283,8 @@ def reject(state: PostState) -> dict:
 # ------------------------------------------------------------------ 그래프 조립
 
 
-def build_graph(db_path: Path | str = DATA / "checkpoints.sqlite"):
+def build_graph(db_path: Path | str | None = None):
+    db_path = db_path or os.getenv("CHECKPOINT_DB") or DATA / "checkpoints.sqlite"
     g = StateGraph(PostState)
     g.add_node("draft_post", draft_post)
     g.add_node("check_facts", check_facts)

@@ -32,6 +32,14 @@ import re
 
 QUALITY_THRESHOLD = int(os.getenv("QUALITY_THRESHOLD", "80"))
 
+# ---------------------------------------------------------------- 응답·대기 운영 규칙
+# 재작성 요청(= 다시 판정) 상한. 상한에 닿으면 담당자는 승인 / 수정 후 승인 / 반려 중에서 고른다.
+#   AI에게 같은 일을 끝없이 다시 시키는 루프를 막고, 그쯤이면 사람이 직접 고치는 편이 빠르다.
+MAX_REVISIONS = int(os.getenv("MAX_REVISIONS", "2"))
+# 승인 대기 기한(일). 넘긴 건은 대기함 맨 위에 빨간색으로 올린다. 자동 승인·자동 반려는 하지 않는다.
+#   발송은 되돌릴 수 없으므로 '오래 기다렸다'는 이유로 내보내지 않는다(fail-closed).
+PENDING_SLA_DAYS = float(os.getenv("PENDING_SLA_DAYS", "3"))
+
 REASON_LABELS = {
     "NUMERIC_NO_SOURCE": "숫자 출처 누락",
     "LOW_QUALITY": "검수 점수 미달",

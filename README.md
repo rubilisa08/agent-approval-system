@@ -46,7 +46,7 @@ python cli.py list
 python cli.py approve <PENDING인 request_id> 내이름
 ```
 
-`revise <id> "<피드백>"`, `reject <id> "<사유>"`도 쓸 수 있습니다.
+`revise <id> "<피드백>"`, `reject <id> "<사유>"`, `pending`(대기 건만, 기한 초과 건부터)도 쓸 수 있습니다.
 
 ## 사람 승인을 받는 기준
 
@@ -60,6 +60,19 @@ python cli.py approve <PENDING인 request_id> 내이름
 | 품질 평가 실패 | 평가 노드 예외·파싱 실패 (fail-closed) |
 | 재작성본 확인 | 담당자가 재작성을 요청한 글은 재검사를 통과해도 담당자에게 되돌림 |
 
+**기준 검증:** 정답을 붙인 초안 10건(`eval_set.py`)에 기준 조합마다 개입률·놓침·헛멈춤을 세어 봅니다. 결과는 `docs/criteria_eval.md`에 저장됩니다.
+
+```bash
+python eval_criteria.py --runs 2
+```
+
+**운영 규칙** (`criteria.py`, 환경 변수로 조정)
+
+| 규칙 | 기본값 | 동작 |
+|---|---|---|
+| 재작성 요청 상한 `MAX_REVISIONS` | 2회 | 상한에 닿으면 재작성 버튼이 꺼지고 승인·수정 후 승인·반려만 남음 |
+| 대기 기한 `PENDING_SLA_DAYS` | 3일 | 넘긴 건은 대기함 맨 위에 ⏰ 빨간색으로 표시. 자동 승인·자동 반려는 하지 않음 |
+
 ## 파일 구조
 
 | 파일 | 역할 |
@@ -71,8 +84,11 @@ python cli.py approve <PENDING인 request_id> 내이름
 | `cli.py` | 터미널에서 HITL 흐름 확인 |
 | `llm.py` | OpenAI / Gemini / offline 선택 |
 | `samples.py` | 데모 요청 6건 (예시 도메인과 가상 수치) |
+| `eval_set.py` | 기준 검증용 정답 데이터: 고정 초안 10건 + "사람이 봐야 하나" |
+| `eval_criteria.py` | 기준 조합별 개입률·놓침·헛멈춤 비교표 생성 |
 | `data/subscribers.csv` | 예시 구독자 12명 |
 | `docs/screenshots/` | REPORT.md에 쓴 화면 캡처 |
+| `docs/criteria_eval.md` | 기준 비교표 실행 결과 (gpt-4.1-mini, 2회) |
 
 실행하면 `data/checkpoints.sqlite`(대기 중인 작업)와 `outbox/`(발송본과 `send_log.jsonl`)가 생깁니다. 데모에서 "발송"은 실제 메일 대신 `outbox/`에 기록합니다. 둘 다 `.gitignore`에 들어 있습니다.
 
