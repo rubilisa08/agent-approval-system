@@ -158,7 +158,10 @@ with st.sidebar:
     st.header("📨 콘텐츠 발행 승인함")
     st.caption(f"LLM: **{llm.provider_label()}**")
     st.caption(f"구독자: **{subscriber_count()}명** (data/subscribers.csv)")
-    st.caption(f"체크포인터: `{os.getenv('CHECKPOINT_DB') or 'data/checkpoints.sqlite'}`")
+    _db = os.getenv("CHECKPOINT_DB") or "data/checkpoints.sqlite"
+    if os.path.isabs(_db):  # 저장소 밖의 DB는 로컬 경로를 화면에 그대로 드러내지 않고 파일 이름만 보여 준다
+        _db = os.path.basename(_db)
+    st.caption(f"체크포인터: `{_db}`")
     st.divider()
     st.markdown("**사람 승인이 필요한 경우**")
     st.markdown(
@@ -392,7 +395,7 @@ with tab_log:
         d1, d2 = st.columns(2)
         with d1:
             with st.container(border=True, height=420):
-                st.markdown(j.get("draft", ""))
+                st.markdown(render_post(j.get("draft", ""), []), unsafe_allow_html=True)
         with d2:
             if j.get("decision"):
                 st.markdown(f"**담당자 결정**: {j['decision'].get('action')} · {j['decision'].get('reviewer') or '-'} · {j['decision'].get('comment') or ''}")
